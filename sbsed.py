@@ -3,9 +3,12 @@
 """Simple Bytes Editor / Binary Stream Editor.
 
 Usage:
-    bsed --file source[,target] --edit editor_action [editor_action_1 [editor_action_2]
+    sbsed --file source[,target] --edit editor_action [editor_action_1 [editor_action_2]
         edit_action: target_offset:source_data:[data_length[:operation]]
         operation: can be either "overwrite" or "copy". Default: overwrite
+
+The 2-Clause BSD License:
+https://opensource.org/licenses/BSD-2-Clause
 
 Copyright (c) 2018, Timothy Lin
 All rights reserved.
@@ -40,8 +43,10 @@ from __future__ import print_function
 import os
 import re
 import sys
+import math
 import shlex
 import argparse
+import traceback
 
 
 def ShlexSplit(shstr, splitters={','}, escape=''):
@@ -77,7 +82,7 @@ def LengthAdjust(bstr, width=0):
 
 
 def Bs2Ba(bstr, width=0):
-    """ Conversion from a hex-digit byte-string to the network-byte-order hex-digit byte-array.
+    """Conversion from a hex-digit byte-string to the network-byte-order hex-digit byte-array.
 
     bstr - the byte string.\n
     width - the data length, counted in byte."""
@@ -87,7 +92,7 @@ def Bs2Ba(bstr, width=0):
 
 
 def Le2N(bstr, width=0):
-    """ Conversion from the little-endian hex-digit byte-array to the network-byte-order hex-digit byte-array.
+    """Conversion from the little-endian hex-digit byte-array to the network-byte-order hex-digit byte-array.
 
     bstr - the byte string.\n
     width - the data length, counted in byte."""
@@ -109,7 +114,7 @@ def LeInt(source, width=0):
 
 
 def Guid2N(gstr):
-    """Conversion from a UUID string to to the network-byte-order hex-digit byte-array"""
+    """Conversion from a UUID string to to the network-byte-order hex-digit byte-array."""
 
     # The canonical 8-4-4-4-12 format GUID string:
     # 123e4567-e89b-12d3-a456-426655440000
@@ -123,7 +128,7 @@ def Guid2N(gstr):
 
 
 def SafeEval(evalstr, default=None, globalz=None, localz=None):
-    """A safer wrapper for eval()"""
+    """A safer wrapper for eval()."""
 
     if not globalz:
         globalz = {}
@@ -136,7 +141,7 @@ def SafeEval(evalstr, default=None, globalz=None, localz=None):
 
 
 class EditorAction(object):
-    """The editor's action"""
+    """The editor's action."""
     def __init__(self, edstr):
         self.target_offset = None
         self.source_data = None
@@ -150,7 +155,7 @@ class EditorAction(object):
             self.target_offset = SafeEval(eds[0]) if eds[0] else None
             self.source_data = eds[1]
             self.length = SafeEval(eds[2]) if eds[2] else None
-            self.operation = eds[3]
+            self.operation = eds[3].lower()
         except IndexError:
             pass
 
@@ -160,10 +165,9 @@ class EditorAction(object):
         data_x = self.source_data.lower().split('=')
 
         def strx(data):
-            if data.startswith('"') and self.source_data.endswith('"'):
-                return bytearray(data[1:-1], encoding=self.encoding)
-            else:
-                return bytearray(data, encoding=self.encoding)
+            if data.startswith('"') and data.endswith('"'):
+                data = data[1:-1]
+            return bytearray(data, encoding=self.encoding)
         def intx(data, width):
             if data_data.startswith('0x'):
                 return Le2N(data[2:], width)
@@ -174,19 +178,14 @@ class EditorAction(object):
             self.hexdata = strx(self.source_data)
         elif len(data_x) == 2:
             data_type, data_data = data_x
+            if not data_type or not data_data:
+                raise Exception('Incorrect source data: [%s]' % self.source_data)
 
-            if data_type in {'i8', 'int8', 'integer8'}:
-                self.hexdata = intx(data_data, 1)
-            elif data_type in {'i16', 'int16', 'integer16'}:
-                self.hexdata = intx(data_data, 2)
-            elif data_type in {'i32', 'int32', 'integer32'}:
-                self.hexdata = intx(data_data, 4)
-            elif data_type in {'i32', 'int64', 'integer64'}:
-                self.hexdata = intx(data_data, 8)
-            elif data_type in {'i128', 'int128', 'integer128'}:
-                self.hexdata = intx(data_data, 16)
-                # NEWREL: what else?
-                # NEWREL: use RE: '(i|int|integer)(\d+)'
+            intz = re.match('(i|int|integer)(\d+)', data_type)
+            if intz:
+                # Handle these integers: i8, int8, intger8, i16, int16, integer 16....
+                # Note: integer9 would be treated as integer16
+                self.hexdata=intx(data_data, int(math.ceil(int(intz.group(2))/8.)))
             elif data_type in {'b', 'bytes'}:
                 if data_data.startswith('0x'):
                     self.hexdata = Bs2Ba(data_data[2:])
@@ -261,7 +260,7 @@ class CommandArgument(argparse.ArgumentParser):
                 self.edits += [EditorAction(ed)]
             except Exception:
                 self.specific_help = 'Invalid editor action:%s' % ed
-                raise
+                raise #Exception('')
         self.need_help = ''
         
     def help(self):
@@ -293,24 +292,20 @@ class Editor(object):
         self.PreviousAction = None
 
     def overwrite(self, action):
-        dlen = min(action.length, len(self.content) - action.target_offset)
-        if dlen < 1:
-            return # Ignore the overrun error. Or, what shall we do?
-        # BUGBUG: boundary-hit is not verify.
-        self.content[action.target_offset:action.target_offset+dlen] = action.hexdata[:dlen]
-        self.changed = True
-        
-    def copyover(self, action):
         if action.from_offset is not None:
             data = self.content[action.from_offset:action.from_offset+action.length]
+            dlen = len(data)
+        #elif action.from_file is not None:
+        #    pass
         else:
-            return  # TODO: the source content could be derived from a source file.
-        if len(data) < 1:
-            return # Ignore the overrun error. Or, what shall we do?
-        # BUGBUG: boundary-hit is not verify.
-        self.content[action.target_offset:action.target_offset+len(data)] = data
+            dlen = min(action.length, len(self.content) - action.target_offset)
+            data = action.hexdata[:dlen]
+        if dlen < 1:
+            return # Ignore the boundary-overrun error. Or, what else shall we do?
+        # BUGBUG. verify this: boundary-hit.
+        self.content[action.target_offset:action.target_offset+dlen] = data
         self.changed = True
-    
+
     def edit(self, action):
         if action.target_offset in {None, '+'} and self.PreviousAction:
             action.target_offset = self.PreviousAction.target_offset
@@ -318,12 +313,8 @@ class Editor(object):
                 raise Exception('Invalid target offset')
             action.target_offset += self.PreviousAction.length
 
-        if action.operation == 'overwrite':
+        if action.operation in {'overwrite', 'copy'}:
             self.overwrite(action)
-        elif action.operation in {'copy', 'copyover'}:
-            self.copyover(action)
-        #elif action.operation == 'insert':
-        #    self.insert(action)
         else:
             print('Unsupported editor action: %s' % action.operation)
         self.PreviousAction = action
@@ -335,11 +326,6 @@ class Editor(object):
             with open(self.output_file, 'wb') as fout:
                 fout.write(self.content)
 
-
-    #def __exit__(self ,type, value, traceback):
-    #    pass
-
-
 if __name__ == '__main__':
     arg = CommandArgument()
     if arg.need_help:
@@ -348,7 +334,12 @@ if __name__ == '__main__':
 
     input_file = arg.input_file
     output_file = arg.output_file if arg.output_file else arg.input_file
-    ed = Editor(input_file, output_file)
+    try:
+        ed = Editor(input_file, output_file)
+    except IOError:
+        traceback.print_exc()
+        sys.exit(2)
+
     for ar in arg.edits:
         ed.edit(ar)
     ed.commit()
