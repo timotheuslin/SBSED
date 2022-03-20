@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 
 # -*- coding: utf-8 -*-
-# pylint: disable=invalid-name, line-too-long, too-many-nested-blocks, too-many-branches, too-many-locals
-# pylint: disable=logging-fstring-interpolation, redefined-outer-name
-# pylint: disable=broad-except, logging-not-lazy
+# pylint: disable=invalid-name, line-too-long, too-many-branches
+# pylint: disable=redefined-outer-name
 # pylint: disable=eval-used
 # pylint: disable=too-few-public-methods
 # pylint: disable=consider-using-with
@@ -19,7 +18,7 @@ Usage:
 The 2-Clause BSD License:
 https://opensource.org/licenses/BSD-2-Clause
 
-Copyright (c) 2018, Timothy Lin
+Copyright (c) 2018-2022, Timothy Lin
 All rights reserved.
 """
 
